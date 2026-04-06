@@ -1,0 +1,89 @@
+# Audio Upscaler Configuration
+
+# Model Architecture
+model:
+  name: "unet1d"
+  channels: [64, 128, 256, 512, 512]
+  bottleneck_channels: 1024
+  kernel_size: 7
+  num_layers: 5
+  dropout: 0.1
+  activation: "leaky_relu"
+  use_attention: false
+
+# Audio Settings
+audio:
+  sample_rate: 44100
+  channels: 2  # Stereo
+  audio_length: 262144  # ~6 seconds at 44.1kHz
+  n_fft: 2048
+  hop_length: 512
+
+# Training Settings
+training:
+  batch_size: 8
+  epochs: 50
+  learning_rate: 3.0e-4
+  weight_decay: 1.0e-5
+  grad_clip: 1.0
+  mixed_precision: true
+  gradient_checkpointing: false
+  num_workers: 4
+  pin_memory: true
+  
+  # Optimizer
+  optimizer: "adamw"
+  betas: [0.9, 0.999]
+  
+  # Scheduler
+  scheduler: "cosine"
+  warmup_epochs: 5
+  min_lr: 1.0e-6
+
+# Loss Function
+loss:
+  l1_weight: 1.0
+  stft_weight: 1.0
+  stft_scales: [512, 1024, 2048]
+  
+# Data Settings
+data:
+  raw_dir: "data/raw"
+  compressed_dir: "data/compressed"
+  checkpoint_dir: "data/checkpoints"
+  
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  
+  # Compression bitrates to train on
+  bitrates: [128, 192]
+  
+  # Augmentation
+  augment: true
+  volume_perturbation: 6.0  # dB
+  
+  seed: 42
+
+# Validation
+validation:
+  every_n_epochs: 1
+  num_samples: 10
+  save_audio: true
+
+# Checkpointing
+checkpoint:
+  save_every: 5
+  keep_last: 3
+  save_best: true
+  
+# Logging
+logging:
+  log_dir: "runs"
+  log_every: 100
+  use_tensorboard: true
+
+# Inference
+inference:
+  overlap: 0.5  # Overlap between chunks
+  batch_size: 1

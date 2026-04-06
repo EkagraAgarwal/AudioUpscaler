@@ -1,0 +1,31 @@
+# Requirements
+# Core
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Audio Processing
+librosa>=0.10.0
+soundfile>=0.12.0
+pyloudnorm>=0.1.0
+sox>=1.4.0
+
+# Data Handling
+pandas>=2.0.0
+requests>=2.31.0
+tqdm>=4.65.0
+
+# Configuration
+pyyaml>=6.0
+
+# Visualization
+matplotlib>=3.7.0
+tensorboard>=2.13.0
+
+# Optional: For advanced loss functions
+# torch-stft>=0.2.0  # Install from source if needed
+
+# Development
+pytest>=7.0.0
+black>=23.0.0
