@@ -44,6 +44,8 @@ def parse_args():
     parser.add_argument("--sample-rate", type=int, default=44100, help="Sample rate")
     parser.add_argument("--bitrate", type=int, default=128, help="Target bitrate for compression")
     parser.add_argument("--lite", action="store_true", help="Use lite model")
+    parser.add_argument("--use-memmap", action="store_true", help="Use memory-mapped WAV files")
+    parser.add_argument("--wav-dir", type=str, default="data/wav_cache", help="WAV cache directory")
     return parser.parse_args()
 
 
@@ -183,7 +185,9 @@ def main():
         audio_length=args.audio_length,
         sample_rate=args.sample_rate,
         bitrate=args.bitrate,
-        num_workers=args.num_workers
+        num_workers=args.num_workers,
+        use_memmap=args.use_memmap,
+        wav_dir=args.wav_dir if args.use_memmap else None
     )
     
     print(f"Train batches: {len(train_loader)}")

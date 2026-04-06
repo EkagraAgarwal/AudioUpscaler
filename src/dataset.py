@@ -18,10 +18,11 @@ import torchaudio.transforms as T
 class AudioUpscaleDataset(Dataset):
     """
     Dataset for audio super-resolution.
-    
+
     Loads audio files and creates pairs of (compressed, original) for training.
+    Supports memory-mapped WAV files for faster loading.
     """
-    
+
     def __init__(
         self,
         audio_dir: str,
@@ -29,7 +30,9 @@ class AudioUpscaleDataset(Dataset):
         sample_rate: int = 44100,
         bitrate: int = 128,
         augment: bool = True,
-        cache_compressed: bool = False
+        cache_compressed: bool = False,
+        use_memmap: bool = False,
+        wav_dir: Optional[str] = None
     ):
         """
         Args:
@@ -39,6 +42,8 @@ class AudioUpscaleDataset(Dataset):
             bitrate: Target bitrate for compression (128, 192, 320)
             augment: Whether to apply augmentation
             cache_compressed: Whether to cache compressed versions
+            use_memmap: Use memory-mapped WAV files for faster loading
+            wav_dir: Directory containing WAV files (if use_memmap=True)
         """
         self.audio_dir = Path(audio_dir)
         self.audio_length = audio_length
@@ -46,44 +51,89 @@ class AudioUpscaleDataset(Dataset):
         self.bitrate = bitrate
         self.augment = augment
         self.cache_compressed = cache_compressed
-        
+        self.use_memmap = use_memmap
+        self.wav_dir = Path(wav_dir) if wav_dir else None
+
         self.audio_files = self._find_audio_files()
-        
+
         if len(self.audio_files) == 0:
             raise ValueError(f"No audio files found in {audio_dir}")
-        
-        print(f"Found {len(self.audio_files)} audio files")
+
+        mode_str = "memory-mapped" if self.use_memmap else "on-demand"
+        print(f"Found {len(self.audio_files)} audio files ({mode_str} loading)")
     
     def _find_audio_files(self) -> List[Path]:
         """Find all audio files in directory."""
-        extensions = {'.mp3', '.flac', '.wav', '.ogg', '.aac'}
-        audio_files = []
-        
-        for ext in extensions:
-            audio_files.extend(self.audio_dir.rglob(f"*{ext}"))
-        
-        return sorted(audio_files)
-    
-    def _load_audio(self, path: Path) -> torch.Tensor:
-        """Load and preprocess audio file."""
+        if self.use_memmap and self.wav_dir:
+            # Use WAV files from wav_dir
+            extensions = {'.wav'}
+            audio_files = []
+            for ext in extensions:
+                audio_files.extend(self.wav_dir.rglob(f"*{ext}"))
+            return sorted(audio_files)
+        else:
+            # Use original audio files
+            extensions = {'.mp3', '.flac', '.wav', '.ogg', '.aac'}
+            audio_files = []
+            for ext in extensions:
+                audio_files.extend(self.audio_dir.rglob(f"*{ext}"))
+            return sorted(audio_files)
+
+    def _load_audio_memmap(self, path: Path) -> torch.Tensor:
+        """Load audio using memory mapping (fast)."""
         try:
-            from pydub import AudioSegment
-            import tempfile
-            import os
+            import soundfile as sf
+            # Read WAV file directly into numpy array
+            data, sr = sf.read(str(path), dtype='float32')
             
-            audio = AudioSegment.from_file(str(path))
+            # Verify sample rate
+            if sr != self.sample_rate:
+                raise ValueError(f"Sample rate mismatch: {sr} != {self.sample_rate}")
             
-            if audio.frame_rate != self.sample_rate:
-                audio = audio.set_frame_rate(self.sample_rate)
+            # Convert to tensor
+            waveform = torch.from_numpy(data)
             
-            if audio.channels > 1:
-                audio = audio.set_channels(1)
+            # Handle stereo (should be mono after conversion)
+            if waveform.dim() > 1:
+                waveform = waveform.mean(dim=1)
             
-            samples = audio.get_array_of_samples()
-            waveform = torch.tensor(samples, dtype=torch.float32) / (2**15)
+            return waveform
             
         except Exception as e:
+            print(f"Error loading {path} with memmap: {e}")
+            return None
+
+    def _load_audio_legacy(self, path: Path) -> torch.Tensor:
+        """Load audio using pydub (slower but supports more formats)."""
+        try:
+            from pydub import AudioSegment
+
+            audio = AudioSegment.from_file(str(path))
+
+            if audio.frame_rate != self.sample_rate:
+                audio = audio.set_frame_rate(self.sample_rate)
+
+            if audio.channels > 1:
+                audio = audio.set_channels(1)
+
+            samples = audio.get_array_of_samples()
+            waveform = torch.tensor(samples, dtype=torch.float32) / (2**15)
+
+            return waveform
+
+        except Exception as e:
             print(f"Error loading {path}: {e}")
+            return None
+
+    def _load_audio(self, path: Path) -> torch.Tensor:
+        """Load and preprocess audio file."""
+        # Choose loading method
+        if self.use_memmap:
+            waveform = self._load_audio_memmap(path)
+        else:
+            waveform = self._load_audio_legacy(path)
+        
+        if waveform is None:
             return None
 
         if len(waveform) < self.audio_length:
@@ -229,7 +279,9 @@ def create_dataloaders(
     bitrate: int = 128,
     train_split: float = 0.8,
     val_split: float = 0.1,
-    num_workers: int = 4
+    num_workers: int = 4,
+    use_memmap: bool = False,
+    wav_dir: Optional[str] = None
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """Create train, validation, and test dataloaders."""
     
@@ -238,18 +290,20 @@ def create_dataloaders(
         audio_length=audio_length,
         sample_rate=sample_rate,
         bitrate=bitrate,
-        augment=True
+        augment=True,
+        use_memmap=use_memmap,
+        wav_dir=wav_dir
     )
-    
+
     n_total = len(dataset)
     n_train = int(n_total * train_split)
     n_val = int(n_total * val_split)
     n_test = n_total - n_train - n_val
-    
+
     train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(
         dataset, [n_train, n_val, n_test]
     )
-    
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size,
@@ -258,7 +312,7 @@ def create_dataloaders(
         pin_memory=True,
         drop_last=True
     )
-    
+
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
@@ -266,7 +320,7 @@ def create_dataloaders(
         num_workers=num_workers,
         pin_memory=True
     )
-    
+
     test_loader = DataLoader(
         test_dataset,
         batch_size=1,
@@ -274,7 +328,7 @@ def create_dataloaders(
         num_workers=num_workers,
         pin_memory=True
     )
-    
+
     return train_loader, val_loader, test_loader
 
 
