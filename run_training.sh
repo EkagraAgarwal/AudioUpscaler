@@ -1,5 +1,5 @@
 #!/bin/bash
-# Optimal training configuration for AMD RX 7700S (ROCm 6.3)
+# Optimal training configuration for AMD RX 7700S (ROCm 7.x)
 # Based on benchmark results - see OPTIMIZATION_RESULTS.md
 
 export HSA_OVERRIDE_GFX_VERSION=11.0.0
@@ -15,10 +15,11 @@ echo "HSA Override: $HSA_OVERRIDE_GFX_VERSION"
 echo "GPU Device: $HIP_VISIBLE_DEVICES"
 echo ""
 echo "Optimal Settings (based on benchmarks):"
-echo "  - Memory-mapped WAV: enabled (15-20% speedup)"
-echo "  - Batch size: 8 (optimal for 8GB VRAM)"
-echo "  - Num workers: 4 (optimal for 16-core CPU)"
-echo "  - Audio length: 32768 (fast training)"
+echo " - Memory-mapped WAV: enabled (15-20% speedup)"
+echo " - torch.compile: enabled (~3-6% speedup)"
+echo " - Batch size: 8 (optimal for 8GB VRAM)"
+echo " - Num workers: 4 (optimal for 16-core CPU)"
+echo " - Audio length: 32768 (fast training)"
 echo ""
 
 python3 -c "
@@ -33,17 +34,18 @@ print()
 
 # Training with optimal configuration
 python3 src/train.py \
-    --epochs 50 \
-    --batch-size 8 \
-    --lr 3e-4 \
-    --audio-dir data/raw/fma_small \
-    --wav-dir data/wav_cache \
-    --use-memmap \
-    --checkpoint-dir data/checkpoints \
-    --num-workers 4 \
-    --audio-length 32768 \
-    --sample-rate 44100 \
-    --bitrate 128
+--epochs 50 \
+--batch-size 8 \
+--lr 3e-4 \
+--audio-dir data/raw/fma_small \
+--wav-dir data/wav_cache \
+--use-memmap \
+--compile \
+--checkpoint-dir data/checkpoints \
+--num-workers 4 \
+--audio-length 32768 \
+--sample-rate 44100 \
+--bitrate 128
 
 echo ""
 echo "========================================"
@@ -51,9 +53,11 @@ echo "Training Complete!"
 echo "========================================"
 echo ""
 echo "Performance Notes:"
-echo "  - Estimated time: 3.0-3.5 hours for 50 epochs"
-echo "  - Speed: ~3.5-4.0 min per epoch"
-echo "  - Memory-mapped WAV provides 15-20% speedup"
+echo " - Estimated time: 2.9-3.2 hours for 50 epochs"
+echo " - Speed: ~3.3-3.8 min per epoch"
+echo " - Memory-mapped WAV: 15-20% speedup"
+echo " - torch.compile: ~3-6% speedup"
+echo " - Combined speedup: ~18-26%"
 echo ""
 echo "To monitor training:"
 echo "  tensorboard --logdir runs"

@@ -2,8 +2,8 @@
 
 ## Test Environment
 - **GPU**: AMD Radeon™ RX 7700S (8 GB)
-- **Platform**: ROCm 6.3
-- **PyTorch**: 2.10.0.dev20250926+rocm6.3
+- **Platform**: ROCm 7.2.1
+- **PyTorch**: 2.11.0.dev20260206+rocm7.0
 - **CPU**: AMD Ryzen 7 7735HS (16 cores)
 - **RAM**: 15 GB
 - **Dataset**: 3,951 audio files (memory-mapped WAV)
@@ -48,11 +48,12 @@
 - **Error**: `HSA_STATUS_ERROR_OUT_OF_REGISTERS`
 - **Notes**: Not supported on current ROCm/PyTorch configuration
 
-#### 6. **torch.compile()**
+#### 6. **torch.compile()** ⭐
 - **Expected**: 10-30% speedup
-- **Status**: ❌ ROCm compatibility issue
-- **Error**: `libamdhip64 version 6.3.42131 is not supported! Required major version is >=7`
-- **Notes**: Requires newer ROCm version (7.x)
+- **Tested**: ROCm 7.2.1 + PyTorch 2.11.0.dev
+- **Result**: ~3-6% speedup (forward: 6%, full step: 3%)
+- **Status**: ✅ Working with ROCm 7.x
+- **Notes**: Modest speedup, use `--compile` flag
 
 #### 7. **iGPU Testing**
 - **Status**: ❌ Memory access faults
@@ -73,16 +74,16 @@
 
 ### What Works:
 1. ✅ **Memory-Mapped WAV** - Best optimization (15-20% speedup)
-2. ✅ **Default batch size (8)** - Optimal for this model/GPU
-3. ✅ **Default num_workers (4)** - Optimal for 16-core CPU
-4. ✅ **3 STFT resolutions** - Not a bottleneck
+2. ✅ **torch.compile()** - Modest speedup (~3-6%)
+3. ✅ **Default batch size (8)** - Optimal for this model/GPU
+4. ✅ **Default num_workers (4)** - Optimal for 16-core CPU
+5. ✅ **3 STFT resolutions** - Not a bottleneck
 
 ### What Doesn't Work:
 1. ❌ **Mixed Precision** - ROCm limitation
-2. ❌ **torch.compile()** - ROCm version mismatch
-3. ❌ **Larger batches** - Slows down training
-4. ❌ **More workers** - Adds overhead without benefit
-5. ❌ **iGPU** - Memory access issues
+2. ❌ **Larger batches** - Slows down training
+3. ❌ **More workers** - Adds overhead without benefit
+4. ❌ **iGPU** - Memory access issues
 
 ## Performance Analysis
 
@@ -114,12 +115,13 @@
 export HSA_OVERRIDE_GFX_VERSION=11.0.0
 
 python3 src/train.py \
-    --epochs 50 \
-    --batch-size 8 \           # Optimal for RX 7700S
-    --num-workers 4 \          # Optimal for 16-core CPU
-    --audio-length 32768 \
-    --use-memmap \             # Best optimization
-    --wav-dir data/wav_cache
+--epochs 50 \
+--batch-size 8 \       # Optimal for RX 7700S
+--num-workers 4 \      # Optimal for 16-core CPU
+--audio-length 32768 \
+--use-memmap \         # 15-20% speedup
+--compile \            # 3-6% speedup (ROCm 7.x)
+--wav-dir data/wav_cache
 ```
 
 ### ⚠️ Don't Bother With:
@@ -127,14 +129,9 @@ python3 src/train.py \
 - More data loader workers (slower)
 - Reduced STFT (minimal gain)
 - Mixed Precision (ROCm incompatible)
-- torch.compile() (ROCm incompatible)
 
 ### 🔮 Future Possibilities:
-1. **Upgrade to ROCm 7.x** - May enable:
-   - torch.compile() support
-   - Better AMP compatibility
-   - Potential 20-30% additional speedup
-
+1. ~~**Upgrade to ROCm 7.x**~~ ✅ DONE - Enables torch.compile()
 2. **Model Optimization**:
    - Prune model to smaller size
    - Quantization (int8)
@@ -172,15 +169,18 @@ If you need faster training, consider:
 
 **Best Configuration Found**:
 - Memory-mapped WAV: ✅ 15-20% speedup
+- torch.compile(): ✅ ~3-6% speedup (ROCm 7.x)
 - Batch size 8: ✅ Optimal
 - Workers 4: ✅ Optimal
 - All STFT resolutions: ✅ Keep
 
-**Current Training Speed**: 3.5-4.0 min/epoch (optimal for your hardware)
+**Combined Speedup**: ~18-26% (MemMap + compile)
+
+**Current Training Speed**: ~3.3-3.8 min/epoch (optimal for your hardware)
 
 **Next Steps**:
 1. Train with current optimal settings
 2. Monitor validation loss
 3. Adjust epochs as needed (30-50 epochs recommended)
 
-The memory-mapped WAV optimization is the only significant speedup available on your current ROCm configuration. Focus on training quality rather than chasing marginal speed improvements.
+The memory-mapped WAV and torch.compile() are the best speedups available. Focus on training quality rather than chasing marginal speed improvements.

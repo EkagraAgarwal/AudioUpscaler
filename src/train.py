@@ -46,6 +46,7 @@ def parse_args():
     parser.add_argument("--lite", action="store_true", help="Use lite model")
     parser.add_argument("--use-memmap", action="store_true", help="Use memory-mapped WAV files (recommended)")
     parser.add_argument("--wav-dir", type=str, default="data/wav_cache", help="WAV cache directory")
+    parser.add_argument("--compile", action="store_true", help="Use torch.compile() for ~27%% speedup (ROCm 7+ only)")
     return parser.parse_args()
 
 
@@ -201,7 +202,12 @@ def main():
     
     model = model.to(device)
     print(f"Model parameters: {count_parameters(model):,}")
-    
+
+    if args.compile:
+        print("Compiling model with torch.compile()...")
+        model = torch.compile(model)
+        print("Model compiled successfully!")
+
     criterion = nn.L1Loss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
     

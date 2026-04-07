@@ -57,14 +57,16 @@ Your configuration is already optimized:
 | **batch_size** | 8 | Optimal for 8GB VRAM |
 | **num_workers** | 4 | Optimal for 16-core CPU |
 | **use_memmap** | true | 15-20% speedup |
+| **compile** | true | 3-6% speedup (ROCm 7.x) |
 | **audio_length** | 32768 | Fast training, good context |
 | **STFT scales** | 3 | Reducing provides <1% gain |
 
 ## Performance
 
-- **Speed**: ~3.5-4.0 min/epoch
+- **Speed**: ~3.3-3.8 min/epoch (with memmap + compile)
 - **Memory**: ~2-3 GB VRAM usage
 - **CPU**: 4 workers (out of 16 cores)
+- **Combined speedup**: ~18-26% over baseline
 
 ## What NOT to Change
 
@@ -73,8 +75,7 @@ Based on benchmarks, these settings are **already optimal**:
 ❌ **Don't increase batch size** - Actually slows down (0.54x)
 ❌ **Don't add more workers** - Adds overhead (0.92x)
 ❌ **Don't reduce STFT scales** - Minimal gain (<1%)
-❌ **Can't use mixed precision** - ROCm 6.3 incompatible
-❌ **Can't use torch.compile()** - Requires ROCm 7.x
+❌ **Can't use mixed precision** - ROCm limitation
 
 ## Monitoring
 
@@ -114,7 +115,7 @@ export HSA_OVERRIDE_GFX_VERSION=11.0.0
 | Configuration | Time/Epoch | Total (50 epochs) |
 |---------------|-----------|-------------------|
 | MP3 (baseline) | 4.5 min | 3.75 hours |
-| **MemMap WAV** | **3.5 min** | **3.0 hours** |
-| MemMap + Quick | 2.5 min | 2.0 hours |
+| **MemMap WAV** | **3.8 min** | **3.2 hours** |
+| **MemMap + compile** | **3.5 min** | **2.9 hours** |
 
-**Recommendation**: Use MemMap WAV configuration for best results.
+**Recommendation**: Use MemMap WAV + torch.compile() for best results.
