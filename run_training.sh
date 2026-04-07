@@ -18,7 +18,7 @@ echo "Optimal Settings (based on benchmarks):"
 echo " - Memory-mapped WAV: enabled (15-20% speedup)"
 echo " - torch.compile: enabled (~3-6% speedup)"
 echo " - Batch size: 8 (optimal for 8GB VRAM)"
-echo " - Num workers: 4 (optimal for 16-core CPU)"
+echo " - Num workers: 8" \n
 echo " - Audio length: 32768 (fast training)"
 echo ""
 
@@ -42,7 +42,7 @@ python3 src/train.py \
 --use-memmap \
 --compile \
 --checkpoint-dir data/checkpoints \
---num-workers 4 \
+--num-workers 8 \
 --audio-length 32768 \
  --sample-rate 44100 \
     --bitrate 128 \
