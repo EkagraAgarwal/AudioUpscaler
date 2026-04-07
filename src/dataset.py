@@ -32,23 +32,28 @@ class AudioUpscaleDataset(Dataset):
         augment: bool = True,
         cache_compressed: bool = False,
         use_memmap: bool = False,
-        wav_dir: Optional[str] = None
+        wav_dir: Optional[str] = None,
+        dynamic_bitrate: bool = False
     ):
         """
         Args:
             audio_dir: Directory containing audio files
             audio_length: Length of audio segment in samples
             sample_rate: Target sample rate
-            bitrate: Target bitrate for compression (128, 192, 320)
+            bitrate: Target bitrate for compression (128, 192, 320) - used when dynamic_bitrate=False
             augment: Whether to apply augmentation
             cache_compressed: Whether to cache compressed versions
             use_memmap: Use memory-mapped WAV files for faster loading
             wav_dir: Directory containing WAV files (if use_memmap=True)
+            dynamic_bitrate: If True, randomly select bitrate from [32, 48, 64, 96, 128] favoring lower values
         """
         self.audio_dir = Path(audio_dir)
         self.audio_length = audio_length
         self.sample_rate = sample_rate
         self.bitrate = bitrate
+        self.dynamic_bitrate = dynamic_bitrate
+        self.bitrate_options = [32, 48, 64, 96, 128]
+        self.bitrate_weights = [0.30, 0.25, 0.25, 0.10, 0.10]
         self.augment = augment
         self.cache_compressed = cache_compressed
         self.use_memmap = use_memmap
@@ -141,9 +146,15 @@ class AudioUpscaleDataset(Dataset):
 
         return waveform
     
-    def _compress_audio(self, waveform: torch.Tensor) -> torch.Tensor:
+    def _get_random_bitrate(self) -> int:
+        """Get random bitrate favoring lower values (32, 48, 64)."""
+        return random.choices(self.bitrate_options, weights=self.bitrate_weights, k=1)[0]
+
+    def _compress_audio(self, waveform: torch.Tensor, bitrate: Optional[int] = None) -> torch.Tensor:
         """Simulate compression by applying low-pass filter and adding noise."""
-        freq_cutoff = min(self.bitrate * 100, self.sample_rate // 4)
+        if bitrate is None:
+            bitrate = self.bitrate
+        freq_cutoff = min(bitrate * 100, self.sample_rate // 4)
         
         waveform_np = waveform.numpy()
         
@@ -153,7 +164,7 @@ class AudioUpscaleDataset(Dataset):
         b, a = signal.butter(4, normalized_cutoff, btype='low')
         compressed = signal.filtfilt(b, a, waveform_np)
         
-        noise_level = max(0.001, 0.1 - self.bitrate / 3200)
+        noise_level = max(0.001, 0.1 - bitrate / 3200)
         noise = np.random.randn(len(compressed)) * noise_level
         compressed = compressed + noise
         
@@ -189,7 +200,8 @@ class AudioUpscaleDataset(Dataset):
             elif len(waveform) < self.audio_length:
                 waveform = torch.nn.functional.pad(waveform, (0, self.audio_length - len(waveform)))
         
-        compressed = self._compress_audio(waveform)
+        current_bitrate = self._get_random_bitrate() if self.dynamic_bitrate else self.bitrate
+        compressed = self._compress_audio(waveform, bitrate=current_bitrate)
         
         if self.augment:
             gain = random.uniform(0.8, 1.2)
@@ -281,10 +293,11 @@ def create_dataloaders(
     val_split: float = 0.1,
     num_workers: int = 4,
     use_memmap: bool = False,
-    wav_dir: Optional[str] = None
+    wav_dir: Optional[str] = None,
+    dynamic_bitrate: bool = False
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """Create train, validation, and test dataloaders."""
-    
+
     dataset = AudioUpscaleDataset(
         audio_dir=audio_dir,
         audio_length=audio_length,
@@ -292,7 +305,8 @@ def create_dataloaders(
         bitrate=bitrate,
         augment=True,
         use_memmap=use_memmap,
-        wav_dir=wav_dir
+        wav_dir=wav_dir,
+        dynamic_bitrate=dynamic_bitrate
     )
 
     n_total = len(dataset)

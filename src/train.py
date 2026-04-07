@@ -47,6 +47,7 @@ def parse_args():
     parser.add_argument("--use-memmap", action="store_true", help="Use memory-mapped WAV files (recommended)")
     parser.add_argument("--wav-dir", type=str, default="data/wav_cache", help="WAV cache directory")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile() for ~27%% speedup (ROCm 7+ only)")
+    parser.add_argument("--dynamic-bitrate", action="store_true", help="Use dynamic bitrate (32, 48, 64, 96, 128 kbps) favoring lower values")
     return parser.parse_args()
 
 
@@ -188,7 +189,8 @@ def main():
         bitrate=args.bitrate,
         num_workers=args.num_workers,
         use_memmap=args.use_memmap,
-        wav_dir=args.wav_dir if args.use_memmap else None
+        wav_dir=args.wav_dir if args.use_memmap else None,
+        dynamic_bitrate=args.dynamic_bitrate
     )
     
     print(f"Train batches: {len(train_loader)}")
