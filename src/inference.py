@@ -100,7 +100,7 @@ def main():
     print(f"\nLoading model from {args.checkpoint}...")
     checkpoint = torch.load(args.checkpoint, map_location=device)
     
-    model = AudioUNet1D(in_channels=1, base_channels=32, depth=4, use_dilated_bottleneck=True, use_interpolation_upsampling=True)
+    model = AudioUNet1D(in_channels=1, base_channels=48, depth=4, use_dilated_bottleneck=True, use_interpolation_upsampling=True)
     
     state_dict = checkpoint['model_state_dict']
     new_state_dict = {}

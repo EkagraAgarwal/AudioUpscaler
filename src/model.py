@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 
 class DoubleConv(nn.Module):
-    """Double convolution block."""
+    """Double convolution block with residual connection."""
 
     def __init__(self, in_channels, out_channels, kernel_size=7, dilation=1):
         super().__init__()
@@ -23,11 +23,12 @@ class DoubleConv(nn.Module):
             nn.LeakyReLU(0.2, inplace=True),
             nn.Conv1d(out_channels, out_channels, kernel_size, padding=padding, dilation=dilation),
             nn.BatchNorm1d(out_channels),
-            nn.LeakyReLU(0.2, inplace=True)
         )
+        self.residual = nn.Conv1d(in_channels, out_channels, 1) if in_channels != out_channels else nn.Identity()
+        self.activation = nn.LeakyReLU(0.2, inplace=True)
 
     def forward(self, x):
-        return self.conv(x)
+        return self.activation(self.conv(x) + self.residual(x))
 
 
 class DilatedBottleneck(nn.Module):
@@ -52,10 +53,16 @@ class DilatedBottleneck(nn.Module):
 
 class AudioUNet1D(nn.Module):
     """
-    Simplified U-Net 1D for audio super-resolution.
+    U-Net 1D for audio super-resolution with improved architecture.
+    
+    Improvements:
+    - Residual connections in encoder/decoder blocks
+    - Dilated bottleneck for expanded receptive field
+    - Interpolation-based upsampling to prevent checkerboard artifacts
+    - Larger base channels for better feature extraction
     """
 
-    def __init__(self, in_channels=1, base_channels=32, depth=4, use_dilated_bottleneck=True, use_interpolation_upsampling=True):
+    def __init__(self, in_channels=1, base_channels=48, depth=4, use_dilated_bottleneck=True, use_interpolation_upsampling=True):
         super().__init__()
 
         self.depth = depth
@@ -98,6 +105,7 @@ class AudioUNet1D(nn.Module):
         if x.dim() == 2:
             x = x.unsqueeze(1)
 
+        input_signal = x
         skips = []
 
         for i in range(self.depth):
@@ -126,6 +134,7 @@ class AudioUNet1D(nn.Module):
             x = self.decoder_convs[i](x)
 
         x = self.output_conv(x)
+        x = x + input_signal
         return x.squeeze(1)
 
 

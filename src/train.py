@@ -11,6 +11,7 @@ from pathlib import Path
 from datetime import datetime
 
 os.environ['HSA_OVERRIDE_GFX_VERSION'] = '11.0.0'
+os.environ['MIOPEN_LOG_LEVEL'] = '4'
 
 import torch
 import torch.nn as nn
@@ -33,7 +34,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train audio super-resolution model")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to config file")
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
-    parser.add_argument("--batch-size", type=int, default=16, help="Batch size (optimal: 16 for RX 7700S with new architecture)")
+    parser.add_argument("--batch-size", type=int, default=12, help="Batch size (optimal: 12 for RX 7700S with larger model)")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--audio-dir", type=str, default="data/raw/fma_small", help="Audio directory")
     parser.add_argument("--checkpoint-dir", type=str, default="data/checkpoints", help="Checkpoint directory")
@@ -205,7 +206,7 @@ def main():
     if args.lite:
         model = AudioUNet1DSimple(in_channels=1, channels=32, use_interpolation_upsampling=True)
     else:
-        model = AudioUNet1D(in_channels=1, base_channels=32, depth=4, use_dilated_bottleneck=True, use_interpolation_upsampling=True)
+        model = AudioUNet1D(in_channels=1, base_channels=48, depth=4, use_dilated_bottleneck=True, use_interpolation_upsampling=True)
 
     model = model.to(device)
     print(f"Model parameters: {count_parameters(model):,}")
@@ -239,10 +240,13 @@ def main():
     stft_weight = args.stft_weight if hasattr(args, 'stft_weight') else 1.0
 
     for epoch in range(start_epoch, args.epochs):
-        if epoch < 15:
+        if epoch < 10:
+            args.l1_weight = 20.0
+            args.stft_weight = 0.05
+        elif epoch < 20:
             args.l1_weight = 10.0
             args.stft_weight = 0.1
-        elif epoch < 30:
+        elif epoch < 40:
             args.l1_weight = 5.0
             args.stft_weight = 0.5
         else:
