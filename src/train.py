@@ -32,8 +32,8 @@ from utils import (
 def parse_args():
     parser = argparse.ArgumentParser(description="Train audio super-resolution model")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to config file")
-    parser.add_argument("--epochs", type=int, default=1, help="Number of epochs")
-    parser.add_argument("--batch-size", type=int, default=8, help="Batch size (optimal: 8 for RX 7700S)")
+    parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
+    parser.add_argument("--batch-size", type=int, default=16, help="Batch size (optimal: 16 for RX 7700S with new architecture)")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--audio-dir", type=str, default="data/raw/fma_small", help="Audio directory")
     parser.add_argument("--checkpoint-dir", type=str, default="data/checkpoints", help="Checkpoint directory")
@@ -42,12 +42,14 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--audio-length", type=int, default=32768, help="Audio length in samples (optimal: 32768)")
     parser.add_argument("--sample-rate", type=int, default=44100, help="Sample rate")
-    parser.add_argument("--bitrate", type=int, default=128, help="Target bitrate for compression")
+    parser.add_argument("--bitrate", type=int, default=64, help="Target bitrate for compression (default: 64 for curriculum learning)")
     parser.add_argument("--lite", action="store_true", help="Use lite model")
     parser.add_argument("--use-memmap", action="store_true", help="Use memory-mapped WAV files (recommended)")
     parser.add_argument("--wav-dir", type=str, default="data/wav_cache", help="WAV cache directory")
     parser.add_argument("--compile", action="store_true", help="Use torch.compile() for ~27%% speedup (ROCm 7+ only)")
     parser.add_argument("--dynamic-bitrate", action="store_true", help="Use dynamic bitrate (32, 48, 64, 96, 128 kbps) favoring lower values")
+    parser.add_argument("--l1-weight", type=float, default=1.0, help="L1 loss weight")
+    parser.add_argument("--stft-weight", type=float, default=1.0, help="STFT loss weight")
     return parser.parse_args()
 
 
@@ -63,54 +65,57 @@ def train_epoch(
 ):
     """Train for one epoch."""
     model.train()
-    
+
     loss_meter = AverageMeter()
     l1_meter = AverageMeter()
     stft_meter = AverageMeter()
     snr_meter = AverageMeter()
-    
+
     pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
-    
+
+    l1_weight = args.l1_weight if hasattr(args, 'l1_weight') else 1.0
+    stft_weight = args.stft_weight if hasattr(args, 'stft_weight') else 1.0
+
     for batch_idx, (compressed, original) in enumerate(pbar):
         compressed = compressed.to(device)
         original = original.to(device)
-        
+
         optimizer.zero_grad()
-        
+
         output = model(compressed)
-        
+
         l1_loss = nn.functional.l1_loss(output, original)
         stft_loss = multi_resolution_stft_loss(output, original)
-        loss = l1_loss + stft_loss
-        
+        loss = l1_weight * l1_loss + stft_weight * stft_loss
+
         loss.backward()
-        
+
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        
+
         optimizer.step()
-        
+
         with torch.no_grad():
             snr = compute_snr(output, original)
-        
+
         loss_meter.update(loss.item(), compressed.size(0))
         l1_meter.update(l1_loss.item(), compressed.size(0))
         stft_meter.update(stft_loss.item(), compressed.size(0))
         snr_meter.update(snr, compressed.size(0))
-        
+
         pbar.set_postfix({
             'loss': f'{loss_meter.avg:.4f}',
             'l1': f'{l1_meter.avg:.4f}',
             'stft': f'{stft_meter.avg:.4f}',
             'snr': f'{snr_meter.avg:.2f}'
         })
-        
+
         global_step = epoch * len(train_loader) + batch_idx
         writer.add_scalar('train/loss', loss.item(), global_step)
         writer.add_scalar('train/l1_loss', l1_loss.item(), global_step)
         writer.add_scalar('train/stft_loss', stft_loss.item(), global_step)
         writer.add_scalar('train/snr', snr, global_step)
         writer.add_scalar('train/lr', get_lr(optimizer), global_step)
-    
+
     return loss_meter.avg, snr_meter.avg
 
 
@@ -198,10 +203,10 @@ def main():
     
     print("\nCreating model...")
     if args.lite:
-        model = AudioUNet1DSimple(in_channels=1, channels=32)
+        model = AudioUNet1DSimple(in_channels=1, channels=32, use_interpolation_upsampling=True)
     else:
-        model = AudioUNet1D(in_channels=1, base_channels=32, depth=4)
-    
+        model = AudioUNet1D(in_channels=1, base_channels=32, depth=4, use_dilated_bottleneck=True, use_interpolation_upsampling=True)
+
     model = model.to(device)
     print(f"Model parameters: {count_parameters(model):,}")
 
@@ -212,9 +217,11 @@ def main():
 
     criterion = nn.L1Loss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
-    
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs, eta_min=1e-6)
-    
+
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5, verbose=True, min_lr=1e-7
+    )
+
     start_epoch = 0
     best_loss = float('inf')
     
@@ -227,18 +234,31 @@ def main():
         best_loss = checkpoint['loss']
     
     print(f"\nTraining for {args.epochs} epoch(s)...")
-    
+
+    l1_weight = args.l1_weight if hasattr(args, 'l1_weight') else 1.0
+    stft_weight = args.stft_weight if hasattr(args, 'stft_weight') else 1.0
+
     for epoch in range(start_epoch, args.epochs):
+        if epoch < 15:
+            args.l1_weight = 10.0
+            args.stft_weight = 0.1
+        elif epoch < 30:
+            args.l1_weight = 5.0
+            args.stft_weight = 0.5
+        else:
+            args.l1_weight = l1_weight
+            args.stft_weight = stft_weight
+
         train_loss, train_snr = train_epoch(
             model, train_loader, criterion, optimizer,
             device, epoch, writer, args
         )
-        
+
         val_loss, val_snr = validate(
             model, val_loader, criterion, device, epoch, writer, args
         )
-        
-        scheduler.step()
+
+        scheduler.step(val_loss)
         
         if val_loss < best_loss:
             best_loss = val_loss

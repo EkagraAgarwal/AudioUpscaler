@@ -1,6 +1,6 @@
 # Audio Upscaler Configuration
-# Optimized for AMD RX 7700S (ROCm 6.3)
-# Based on benchmark results - see OPTIMIZATION_RESULTS.md
+# Optimized for AMD RX 7700S (ROCm 7.x)
+# Updated with architecture improvements for better convergence
 
 # Model Architecture
 model:
@@ -12,43 +12,57 @@ model:
   dropout: 0.1
   activation: "leaky_relu"
   use_attention: false
+  use_dilated_bottleneck: true
+  use_interpolation_upsampling: true
 
 # Audio Settings
 audio:
   sample_rate: 44100
-  channels: 1  # Mono (optimal for training speed)
-  audio_length: 32768  # ~0.75 seconds - optimal for RX 7700S
+  channels: 1
+  audio_length: 32768
   n_fft: 2048
   hop_length: 512
 
-# Training Settings (Optimized based on benchmarks)
+# Training Settings (Updated for improved architecture)
 training:
-  batch_size: 8  # Optimal for 8GB VRAM
-  epochs: 50
+  batch_size: 16
+  epochs: 100
   learning_rate: 3.0e-4
   weight_decay: 1.0e-5
   grad_clip: 1.0
-  mixed_precision: false  # Disabled - ROCm incompatible
+  mixed_precision: false
   gradient_checkpointing: false
-  num_workers: 4  # Optimal for 16-core CPU
+  num_workers: 4
   pin_memory: true
-  use_memmap: true  # Memory-mapped WAV for 15-20% speedup
-  wav_dir: "data/wav_cache"  # Pre-converted WAV files
+  use_memmap: true
+  wav_dir: "data/wav_cache"
 
 # Optimizer
 optimizer: "adamw"
 betas: [0.9, 0.999]
 
-# Scheduler
-scheduler: "cosine"
-warmup_epochs: 5
-min_lr: 1.0e-6
+# Scheduler (ReduceLROnPlateau for plateau breaking)
+scheduler: "reduce_on_plateau"
+patience: 5
+factor: 0.5
+min_lr: 1.0e-7
 
-# Loss Function (3 resolutions is optimal)
+# Loss Function (with spectral convergence)
 loss:
   l1_weight: 1.0
   stft_weight: 1.0
-  stft_scales: [512, 1024, 2048]  # Keep 3 scales - reducing provides <1% speedup
+  stft_scales: [512, 1024, 2048]
+  use_spectral_convergence: true
+
+# Dynamic Loss Weighting
+dynamic_loss:
+  enabled: true
+  early_epochs: 15
+  early_l1_weight: 10.0
+  early_stft_weight: 0.1
+  mid_epochs: 30
+  mid_l1_weight: 5.0
+  mid_stft_weight: 0.5
 
 # Data Settings
 data:
@@ -56,16 +70,21 @@ data:
   compressed_dir: "data/compressed"
   checkpoint_dir: "data/checkpoints"
 
-  train_split: 0.8
-  val_split: 0.1
-  test_split: 0.1
+train_split: 0.8
+val_split: 0.1
+test_split: 0.1
 
-# Compression bitrates to train on
-bitrates: [128, 192]
+# Curriculum Learning (start with 64kbps)
+bitrates: [64]
 
 # Augmentation
 augment: true
-volume_perturbation: 6.0  # dB
+volume_perturbation: 6.0
+
+# Dynamic bitrate for generalization
+dynamic_bitrate: true
+dynamic_bitrate_options: [32, 48, 64, 96, 128]
+dynamic_bitrate_weights: [0.30, 0.25, 0.25, 0.10, 0.10]
 
 seed: 42
 
@@ -89,13 +108,14 @@ logging:
 
 # Inference
 inference:
-  overlap: 0.5  # Overlap between chunks
+  overlap: 0.5
   batch_size: 1
 
-# Performance Notes:
-# - Memory-mapped WAV provides 15-20% speedup
-# - batch_size=8 is optimal (larger is slower)
-# - num_workers=4 is optimal (more adds overhead)
-# - Mixed precision not supported on ROCm 6.3
-# - Current speed: ~3.5-4.0 min/epoch
-# - Estimated training time: 3.0-3.5 hours (50 epochs)
+# Architecture Improvements:
+# - Dilated convolutions at bottleneck (rates: 1, 2, 4, 8, 16)
+# - Interpolation-based upsampling (no checkerboard artifacts)
+# - Spectral convergence in STFT loss
+# - Dynamic loss weighting (L1 heavy early, STFT heavy later)
+# - ReduceLROnPlateau scheduler (patience=5, factor=0.5)
+# - Batch size increased to 16 (better VRAM utilization)
+# - Curriculum learning (start with 64kbps)

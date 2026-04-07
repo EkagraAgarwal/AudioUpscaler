@@ -34,36 +34,78 @@ def stft_loss(
 ) -> torch.Tensor:
     """
     Multi-resolution STFT loss.
-    
+
     Computes L1 loss on STFT magnitude spectrograms.
     """
     pred_stft = torch.stft(pred, n_fft, hop_length, return_complex=True)
     target_stft = torch.stft(target, n_fft, hop_length, return_complex=True)
-    
+
     pred_mag = torch.abs(pred_stft)
     target_mag = torch.abs(target_stft)
-    
+
     loss = torch.nn.functional.l1_loss(pred_mag, target_mag)
-    
+
     return loss
 
 
+def spectral_convergence_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    n_fft: int = 2048,
+    hop_length: int = 512
+) -> torch.Tensor:
+    """
+    Spectral convergence loss.
+
+    Computes the Frobenius norm of the difference between target and predicted
+    magnitudes, divided by the Frobenius norm of the target.
+    This forces the model to respect the overall energy envelope and structure.
+    """
+    pred_stft = torch.stft(pred, n_fft, hop_length, return_complex=True)
+    target_stft = torch.stft(target, n_fft, hop_length, return_complex=True)
+
+    pred_mag = torch.abs(pred_stft)
+    target_mag = torch.abs(target_stft)
+
+    numerator = torch.norm(target_mag - pred_mag, p='fro')
+    denominator = torch.norm(target_mag, p='fro') + 1e-8
+
+    return numerator / denominator
+
+
 def multi_resolution_stft_loss(
-    pred: torch.Tensor, 
-    target: torch.Tensor, 
+    pred: torch.Tensor,
+    target: torch.Tensor,
     n_ffts: list = [512, 1024, 2048]
 ) -> torch.Tensor:
     """
-    Multi-resolution STFT loss at multiple scales.
-    
+    Multi-resolution STFT loss at multiple scales with spectral convergence.
+
+    Combines:
+    1. Log-magnitude distance (L1 on log-scaled magnitudes)
+    2. Spectral convergence (Frobenius norm ratio)
+
     Note: Benchmark shows 3 resolutions is optimal.
-    Reducing to 2 provides <1% speedup (negligible).
     """
     total_loss = 0.0
     for n_fft in n_ffts:
         hop_length = n_fft // 4
-        total_loss += stft_loss(pred, target, n_fft, hop_length)
-    
+
+        pred_stft = torch.stft(pred, n_fft, hop_length, return_complex=True)
+        target_stft = torch.stft(target, n_fft, hop_length, return_complex=True)
+
+        pred_mag = torch.abs(pred_stft)
+        target_mag = torch.abs(target_stft)
+
+        log_mag_loss = torch.nn.functional.l1_loss(
+            torch.log(pred_mag + 1e-8),
+            torch.log(target_mag + 1e-8)
+        )
+
+        spec_conv_loss = spectral_convergence_loss(pred, target, n_fft, hop_length)
+
+        total_loss += log_mag_loss + spec_conv_loss
+
     return total_loss / len(n_ffts)
 
 
