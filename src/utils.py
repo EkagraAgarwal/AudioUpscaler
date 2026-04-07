@@ -37,8 +37,9 @@ def stft_loss(
 
     Computes L1 loss on STFT magnitude spectrograms.
     """
-    pred_stft = torch.stft(pred, n_fft, hop_length, return_complex=True)
-    target_stft = torch.stft(target, n_fft, hop_length, return_complex=True)
+    window = torch.hann_window(n_fft, device=pred.device)
+    pred_stft = torch.stft(pred, n_fft, hop_length, window=window, return_complex=True)
+    target_stft = torch.stft(target, n_fft, hop_length, window=window, return_complex=True)
 
     pred_mag = torch.abs(pred_stft)
     target_mag = torch.abs(target_stft)
@@ -61,8 +62,9 @@ def spectral_convergence_loss(
     magnitudes, divided by the Frobenius norm of the target.
     This forces the model to respect the overall energy envelope and structure.
     """
-    pred_stft = torch.stft(pred, n_fft, hop_length, return_complex=True)
-    target_stft = torch.stft(target, n_fft, hop_length, return_complex=True)
+    window = torch.hann_window(n_fft, device=pred.device)
+    pred_stft = torch.stft(pred, n_fft, hop_length, window=window, return_complex=True)
+    target_stft = torch.stft(target, n_fft, hop_length, window=window, return_complex=True)
 
     pred_mag = torch.abs(pred_stft)
     target_mag = torch.abs(target_stft)
@@ -91,8 +93,9 @@ def multi_resolution_stft_loss(
     for n_fft in n_ffts:
         hop_length = n_fft // 4
 
-        pred_stft = torch.stft(pred, n_fft, hop_length, return_complex=True)
-        target_stft = torch.stft(target, n_fft, hop_length, return_complex=True)
+        window = torch.hann_window(n_fft, device=pred.device)
+        pred_stft = torch.stft(pred, n_fft, hop_length, window=window, return_complex=True)
+        target_stft = torch.stft(target, n_fft, hop_length, window=window, return_complex=True)
 
         pred_mag = torch.abs(pred_stft)
         target_mag = torch.abs(target_stft)
