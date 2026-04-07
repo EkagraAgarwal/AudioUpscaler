@@ -44,8 +44,9 @@ python3 src/train.py \
 --checkpoint-dir data/checkpoints \
 --num-workers 4 \
 --audio-length 32768 \
---sample-rate 44100 \
---bitrate 128
+ --sample-rate 44100 \
+    --bitrate 128 \
+    --dynamic-bitrate
 
 echo ""
 echo "========================================"
