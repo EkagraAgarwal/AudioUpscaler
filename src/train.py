@@ -12,11 +12,17 @@ from datetime import datetime
 
 os.environ['HSA_OVERRIDE_GFX_VERSION'] = '11.0.0'
 os.environ['MIOPEN_LOG_LEVEL'] = '4'
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['HSA_ENABLE_SDMA'] = '0'
+os.environ['MIOPEN_FIND_MODE'] = 'normal'
+os.environ['MIOPEN_DISABLE_CACHE'] = '0'
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
+from torch.amp import autocast, GradScaler
 from tqdm import tqdm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -34,7 +40,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Train audio super-resolution model")
     parser.add_argument("--config", type=str, default="config.yaml", help="Path to config file")
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
-    parser.add_argument("--batch-size", type=int, default=12, help="Batch size (optimal: 12 for RX 7700S with larger model)")
+    parser.add_argument("--batch-size", type=int, default=8, help="Batch size (optimal: 8 for RX 7700S 8GB VRAM)")
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--audio-dir", type=str, default="data/raw/fma_small", help="Audio directory")
     parser.add_argument("--checkpoint-dir", type=str, default="data/checkpoints", help="Checkpoint directory")
@@ -51,6 +57,7 @@ def parse_args():
     parser.add_argument("--dynamic-bitrate", action="store_true", help="Use dynamic bitrate (32, 48, 64, 96, 128 kbps) favoring lower values")
     parser.add_argument("--l1-weight", type=float, default=1.0, help="L1 loss weight")
     parser.add_argument("--stft-weight", type=float, default=1.0, help="STFT loss weight")
+    parser.add_argument("--amp", action="store_true", help="Use automatic mixed precision (FP16)")
     return parser.parse_args()
 
 
@@ -62,7 +69,8 @@ def train_epoch(
     device,
     epoch,
     writer,
-    args
+    args,
+    scaler=None
 ):
     """Train for one epoch."""
     model.train()
@@ -76,24 +84,30 @@ def train_epoch(
 
     l1_weight = args.l1_weight if hasattr(args, 'l1_weight') else 1.0
     stft_weight = args.stft_weight if hasattr(args, 'stft_weight') else 1.0
+    use_amp = scaler is not None
 
     for batch_idx, (compressed, original) in enumerate(pbar):
-        compressed = compressed.to(device)
-        original = original.to(device)
+        compressed = compressed.to(device, non_blocking=True)
+        original = original.to(device, non_blocking=True)
 
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
-        output = model(compressed)
+        with autocast('cuda', enabled=use_amp):
+            output = model(compressed)
+            l1_loss = nn.functional.l1_loss(output, original)
+            stft_loss = multi_resolution_stft_loss(output, original)
+            loss = l1_weight * l1_loss + stft_weight * stft_loss
 
-        l1_loss = nn.functional.l1_loss(output, original)
-        stft_loss = multi_resolution_stft_loss(output, original)
-        loss = l1_weight * l1_loss + stft_weight * stft_loss
-
-        loss.backward()
-
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-        optimizer.step()
+        if use_amp:
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
 
         with torch.no_grad():
             snr = compute_snr(output, original)
@@ -127,25 +141,26 @@ def validate(
     device,
     epoch,
     writer,
-    args
+    args,
+    use_amp=False
 ):
     """Validate model."""
     model.eval()
-    
+
     loss_meter = AverageMeter()
     snr_meter = AverageMeter()
-    
+
     with torch.no_grad():
         for compressed, original in tqdm(val_loader, desc="Validating"):
-            compressed = compressed.to(device)
-            original = original.to(device)
-            
-            output = model(compressed)
-            
-            l1_loss = nn.functional.l1_loss(output, original)
-            stft_loss = multi_resolution_stft_loss(output, original)
-            loss = l1_loss + stft_loss
-            
+            compressed = compressed.to(device, non_blocking=True)
+            original = original.to(device, non_blocking=True)
+
+            with autocast('cuda', enabled=use_amp):
+                output = model(compressed)
+                l1_loss = nn.functional.l1_loss(output, original)
+                stft_loss = multi_resolution_stft_loss(output, original)
+                loss = l1_loss + stft_loss
+
             snr = compute_snr(output, original)
             
             loss_meter.update(loss.item(), compressed.size(0))
@@ -210,6 +225,15 @@ def main():
 
     model = model.to(device)
     print(f"Model parameters: {count_parameters(model):,}")
+    
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        if hasattr(torch.backends, 'hip'):
+            torch.backends.hip.matmul.allow_tf32 = True
+        print(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        print(f"GPU Compute Capability: {torch.cuda.get_device_properties(0).major}.{torch.cuda.get_device_properties(0).minor}")
 
     if args.compile:
         print("Compiling model with torch.compile()...")
@@ -219,13 +243,18 @@ def main():
     criterion = nn.L1Loss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
 
+    scaler = None
+    if args.amp:
+        scaler = GradScaler('cuda')
+        print("Using Automatic Mixed Precision (AMP)")
+
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=5, min_lr=1e-7
     )
 
     start_epoch = 0
     best_loss = float('inf')
-    
+
     if args.resume:
         print(f"Resuming from {args.resume}")
         checkpoint = torch.load(args.resume)
@@ -233,7 +262,7 @@ def main():
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         start_epoch = checkpoint['epoch'] + 1
         best_loss = checkpoint['loss']
-    
+
     print(f"\nTraining for {args.epochs} epoch(s)...")
 
     l1_weight = args.l1_weight if hasattr(args, 'l1_weight') else 1.0
@@ -255,11 +284,11 @@ def main():
 
         train_loss, train_snr = train_epoch(
             model, train_loader, criterion, optimizer,
-            device, epoch, writer, args
+            device, epoch, writer, args, scaler
         )
 
         val_loss, val_snr = validate(
-            model, val_loader, criterion, device, epoch, writer, args
+            model, val_loader, criterion, device, epoch, writer, args, use_amp=args.amp
         )
 
         scheduler.step(val_loss)

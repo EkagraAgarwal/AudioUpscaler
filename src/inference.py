@@ -19,23 +19,27 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from model import AudioUNet1D, AudioUNet1DSimple
 
 
-def compress_to_32kbps(waveform, sample_rate=44100):
-    """Simulate 32kbps compression with severe low-pass filtering."""
-    freq_cutoff = min(3200, sample_rate // 4)
-    
+def compress_audio(waveform, sample_rate=44100, bitrate=64):
+    """Simulate compression with low-pass filtering."""
+    freq_cutoff = min(bitrate * 100, sample_rate // 4)
+
     waveform_np = waveform.numpy() if isinstance(waveform, torch.Tensor) else waveform
-    
+
     nyquist = sample_rate // 2
     normalized_cutoff = min(freq_cutoff / nyquist, 0.99)
     b, a = signal.butter(4, normalized_cutoff, btype='low')
     compressed = signal.filtfilt(b, a, waveform_np)
-    
-    noise_level = 0.08
+
+    noise_level = max(0.001, 0.1 - bitrate / 3200)
     noise = np.random.randn(len(compressed)) * noise_level
     compressed = compressed + noise
     compressed = np.clip(compressed, -1, 1)
-    
+
     return torch.from_numpy(compressed).float()
+
+def compress_to_32kbps(waveform, sample_rate=44100):
+    """Simulate 32kbps compression with severe low-pass filtering."""
+    return compress_audio(waveform, sample_rate, bitrate=32)
 
 
 def upscale_audio(
@@ -89,7 +93,8 @@ def main():
     parser.add_argument("--input", type=str, required=True, help="Input audio file")
     parser.add_argument("--checkpoint", type=str, default="data/checkpoints/best_model.pt", help="Model checkpoint")
     parser.add_argument("--output", type=str, default=None, help="Output audio file")
-    parser.add_argument("--compressed-output", type=str, default=None, help="Output for 32kbps compressed version")
+    parser.add_argument("--compressed-output", type=str, default=None, help="Output for compressed version")
+    parser.add_argument("--bitrate", type=int, default=64, help="Target bitrate for compression (32, 64, 128, etc.)")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use")
     parser.add_argument("--chunk-size", type=int, default=32768, help="Chunk size for processing")
     args = parser.parse_args()
@@ -126,20 +131,20 @@ def main():
         waveform = waveform.mean(dim=0, keepdim=True)
     
     print(f"Audio: {waveform.shape[-1]} samples at {sample_rate}Hz")
-    
-    print("\nCreating 32kbps compressed version...")
-    compressed = compress_to_32kbps(waveform.squeeze(0), sample_rate)
-    
+
+    print(f"\nCreating {args.bitrate}kbps compressed version...")
+    compressed = compress_audio(waveform.squeeze(0), sample_rate, bitrate=args.bitrate)
+
     input_path = Path(args.input)
-    
+
     compressed_path = args.compressed_output
     if compressed_path is None:
-        compressed_path = str(input_path.parent / f"{input_path.stem}_32kbps.wav")
+        compressed_path = str(input_path.parent / f"{input_path.stem}_{args.bitrate}kbps.wav")
     else:
         os.makedirs(os.path.dirname(compressed_path) if os.path.dirname(compressed_path) else '.', exist_ok=True)
     import soundfile as sf
     sf.write(compressed_path, compressed.unsqueeze(0).numpy().T, sample_rate)
-    print(f"Saved 32kbps version to: {compressed_path}")
+    print(f"Saved {args.bitrate}kbps version to: {compressed_path}")
     
     print("\nUpscaling audio...")
     upscaled = upscale_audio(model, compressed.unsqueeze(0), device, chunk_size=args.chunk_size)
@@ -154,9 +159,9 @@ def main():
     print(f"Saved upscaled version to: {output_path}")
     
     print(f"\nFiles ready for comparison:")
-    print(f"  Original:  {args.input}")
-    print(f"  32kbps:    {compressed_path}")
-    print(f"  Upscaled:  {output_path}")
+    print(f"  Original: {args.input}")
+    print(f"  {args.bitrate}kbps: {compressed_path}")
+    print(f"  Upscaled: {output_path}")
 
 
 if __name__ == "__main__":
