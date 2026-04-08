@@ -19,6 +19,8 @@ os.environ['MIOPEN_FIND_MODE'] = 'normal'
 os.environ['MIOPEN_DISABLE_CACHE'] = '0'
 os.environ['MIOPEN_USER_DB_PATH'] = '/tmp/miopen-cache'
 os.environ['MIOPEN_SYSTEM_DB_PATH'] = '/tmp/miopen-cache'
+os.environ['MIOPEN_DEBUG_CONVOLUTION'] = '0'
+os.environ['MIOPEN_DISABLE_FIND_FAST_SEARCH'] = '0'
 
 import torch
 import torch.nn as nn
