@@ -17,6 +17,8 @@ os.environ['MKL_NUM_THREADS'] = '1'
 os.environ['HSA_ENABLE_SDMA'] = '0'
 os.environ['MIOPEN_FIND_MODE'] = 'normal'
 os.environ['MIOPEN_DISABLE_CACHE'] = '0'
+os.environ['MIOPEN_USER_DB_PATH'] = '/tmp/miopen-cache'
+os.environ['MIOPEN_SYSTEM_DB_PATH'] = '/tmp/miopen-cache'
 
 import torch
 import torch.nn as nn

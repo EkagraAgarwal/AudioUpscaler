@@ -10,6 +10,10 @@ export MKL_NUM_THREADS=1
 export HSA_ENABLE_SDMA=0
 export MIOPEN_FIND_MODE=normal
 export MIOPEN_DISABLE_CACHE=0
+export MIOPEN_USER_DB_PATH=/tmp/miopen-cache
+export MIOPEN_SYSTEM_DB_PATH=/tmp/miopen-cache
+
+mkdir -p /tmp/miopen-cache
 
 source venv/bin/activate
 
